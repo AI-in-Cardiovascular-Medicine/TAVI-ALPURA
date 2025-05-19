@@ -33,6 +33,6 @@ Thomas Pilgrim, Stephan Windecker, Christoph Gräni. Under Review, 2025.
 
 ```
 
-```
+
 This tool is intended for research purposes only and has not been approved for clinical use.
-```
+
