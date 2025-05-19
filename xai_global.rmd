@@ -1,0 +1,225 @@
+---
+title: "Survival Explanations"
+output: html_document
+params:
+  event: "death"  # Default value for the event
+---
+
+```{r r_imports}
+library(reticulate)  # To interface with Python
+library(readxl)      # To read Excel files
+library(survex)      # For survival model explanation
+library(survival)
+use_condaenv("survival_analysis", required = TRUE)
+py_config()
+
+event <- params$event
+```
+
+```{python pyhton_models_extraction}
+import os
+import pickle
+import pandas as pd
+import sksurv
+import json
+
+# Use the event from R
+event = r["event"]
+
+# Time and event column in datasets
+with open("datasets/outcome_names.json", "r") as file:
+    outcome_names = json.load(file)
+event_main = event.split("_")[0]
+time_col = outcome_names[event_main]["time_column"]
+event_col = outcome_names[event_main]["event_column"]
+
+# Read results file
+folder = os.path.join("results", event)
+results_file = os.path.join(folder, "results.pkl")
+with open(results_file, 'rb') as f:
+    results = pickle.load(f)
+
+# Load models to be explained
+seed = 42
+with open(os.path.join(folder, "best_combinations.json"), "r") as file:
+    combinations = json.load(file)
+
+# Extract models and preprocess datasets
+x_test_list = []
+x_train_list = []
+y_test_list = []
+y_train_list = []
+models = []
+for comb in combinations:
+  scaler, selector, model_name, search, train_strategy = list(comb.values())
+  best_estimator = results[seed][scaler][selector][model_name][search][train_strategy]
+  x_test = results[seed]["x_test"]
+  x_train = results[seed]["x_train"]
+  y_test_list.append(pd.DataFrame(results[seed]["y_test"]))
+  y_train_list.append(pd.DataFrame(results[seed]["y_train"]))
+  # Preprocess x_test
+  x_test = best_estimator["scaler"].transform(x_test)
+  x_train = best_estimator["scaler"].transform(x_train)
+  selector = best_estimator["selector"]
+  x_test_list.append(selector.transform(x_test))
+  x_train_list.append(selector.transform(x_train))
+  # Get model
+  models.append(best_estimator['model'])
+```
+
+
+```{r}
+models <- py$models
+x_test_list <- py$x_test_list
+x_train_list <- py$x_train_list
+y_test_list <- py$y_test_list
+y_train_list <- py$y_train_list
+combinations <- py$combinations
+time_col <- py$time_col
+event_col <- py$event_col
+folder <- py$folder
+
+out_folder <- paste0(folder, "/explanations/")
+if (!dir.exists(out_folder)) {
+  dir.create(out_folder)
+}
+```
+
+
+```{r SHAP_computation_parallel}
+library(future.apply)
+plan(multicore)
+
+process_model <- function(i) {
+  print(combinations[i][[1]])
+  model <- models[i][[1]]
+  print(model)
+  x_train <- x_train_list[i][[1]]
+  x_test <- x_test_list[i][[1]]
+  y_train <- y_train_list[i][[1]]
+  y_test <- y_test_list[i][[1]]
+
+  explainer <- explain(
+    model,
+    data = x_train,
+    y = Surv(y_train[, time_col], y_train[, event_col]),
+    times = seq(1, 1825, length.out = 50)
+  )
+
+  global_survshap <- model_survshap(
+    explainer = explainer,
+    new_observation = x_test,
+    y_true = Surv(y_test[, time_col], y_test[, event_col]),
+    N = 100,
+    calculation_method = "kernelshap",
+    aggregation_method = "integral"
+  )
+
+  filename <- paste(combinations[i][[1]], collapse = "_")
+  filename <- paste0(out_folder, "/", filename, ".rds")
+  saveRDS(global_survshap, filename)
+
+  return(filename)  # Optional: return path to track output
+}
+
+results <- future_lapply(seq_along(models), process_model)
+```
+
+```{r}
+preprocess_values_to_common_scale <- function(data) {
+    # Scale numerical columns to range [0, 1]
+    num_cols <- sapply(data, is.numeric)
+    data[num_cols] <- lapply(data[num_cols], function(x) (x - min(x)) / (max(x) - min(x)))
+    # Map categorical columns to integers with even differences
+    cat_cols <- sapply(data, function(x) !is.numeric(x) & is.factor(x))
+    data[cat_cols] <- lapply(data[cat_cols], function(x) {
+        levels_count <- length(levels(x))
+        mapped_values <- seq(0, 1, length.out = levels_count)
+        mapped_values[match(x, levels(x))]
+    })
+    res <- stack(data)
+    colnames(res) <- c("var_value", "variable")
+    return(res[, 1])
+}
+```
+
+
+```{r plots}
+out_folder <- paste0(folder, "/explanations/")
+if (!dir.exists(out_folder)) {
+  dir.create(out_folder)
+}
+df_list <- list()
+filenames <- list()
+for (i in seq_along(models)) {
+  # Construct filename to load the SHAP object
+  filename <- paste(combinations[i][[1]], collapse = "_")
+  filenames[[i]] <- filename
+  shap_filepath <- paste0(out_folder, "/", filename, ".rds")
+  
+  # Check if the file exists before loading
+  if (!file.exists(shap_filepath)) {
+    message("File not found: ", shap_filepath)
+    next  # Skip to the next iteration if the file doesn't exist
+  }
+  
+  # Load the SHAP object
+  global_survshap <- readRDS(shap_filepath)
+  
+  # Prepare data for python summary plot
+  df <- as.data.frame(do.call(rbind, global_survshap$aggregate))
+  cols <- names(sort(colMeans(abs(df)), decreasing = TRUE))[1:length(df)]
+  df <- df[, cols]
+  df <- stack(df)
+  colnames(df) <- c("shap_value", "variable")
+  original_values <- as.data.frame(global_survshap$variable_values)[, cols]
+  var_value <- preprocess_values_to_common_scale(original_values)
+  df <- cbind(df, var_value)
+  df_list[[i]] <- df
+}
+
+# Pass the list of dataframes to Python
+py$df_list <- df_list
+py$filenames <- filenames
+py$out_folder <- out_folder
+```
+
+```{python SHAP plots}
+import seaborn as sns
+import matplotlib.pyplot as plt
+import pandas as pd
+import shap
+import numpy as np
+
+df_dict = pd.read_csv("datasets/features_dict_plot.csv")
+dictionary = dict(zip(df_dict.iloc[:, 1], df_dict.iloc[:, 0]))
+
+plt.rcParams.update(plt.rcParamsDefault)
+
+# Iterate through the list of dataframes
+for i, df in enumerate(df_list):
+    # Convert the R dataframe to a pandas DataFrame
+    df = pd.DataFrame(df)
+    # Pivot the dataframe to wide format
+    df['pat_id'] = df.groupby('variable').cumcount()
+    df_shap = df.pivot(columns="variable", values="shap_value", index="pat_id")
+    filtered_dict = {key: value for key, value in dictionary.items() if key in df_shap.columns}
+    df_shap = df_shap.rename(columns=filtered_dict)
+    df_data = df.pivot(columns="variable", values="var_value", index="pat_id")
+    # Create a SHAP object from the wide dataframe
+    base_values = np.zeros(df_shap.shape[0])
+    shap_values = shap.Explanation(values=-df_shap.values,
+                                   data=df_data.values,
+                                   feature_names=df_shap.columns,
+                                   base_values=base_values)
+    # Create the beeswarm plot
+    fig, ax = plt.subplots(1, 1)  # Set the figure size
+    n = 100
+    shap.summary_plot(shap_values, max_display=n, show=False)
+    filename = "beeswarn_" + "_".join(combinations[i].values()) + ".png"  # Join the elements with "_"
+    filename = os.path.join(out_folder, filename)
+    plt.xlabel("SHAP value (impact on model output)", fontsize=13)
+    plt.tight_layout()
+    plt.savefig(filename, dpi=300)
+    plt.close()
+```

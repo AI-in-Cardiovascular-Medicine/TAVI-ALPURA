@@ -1,0 +1,235 @@
+---
+title: "Survival Explanations"
+output: html_document
+params:
+  event: "death"  # Default value for the event
+---
+
+```{r r_imports}
+library(reticulate)  # To interface with Python
+library(readxl)      # To read Excel files
+library(survex)      # For survival model explanation
+library(survival)
+use_condaenv("survival_analysis", required = TRUE)
+py_config()
+
+event <- params$event
+```
+
+```{python pyhton_models_extraction}
+import os
+import pickle
+import json
+import pandas as pd
+import numpy as np
+import sksurv
+from sklearn.model_selection import StratifiedKFold
+import seaborn as sns
+import matplotlib.pyplot as plt
+from shap.plots._style import set_style
+import shap
+
+# Use the event from R
+event = r["event"]
+
+# Time and event column in datasets
+with open("datasets/outcome_names.json", "r") as file:
+    outcome_names = json.load(file)
+event_main = event.split("_")[0]
+time_col = outcome_names[event_main]["time_column"]
+event_col = outcome_names[event_main]["event_column"]
+eval_times = [365, 730, 1096, 1460, 1825]
+eval_times_names = ["1y", "2y", "3y", "4y", "5y"]
+seed = 42
+
+# Read results file
+folder = os.path.join("results", event)
+results_file = os.path.join(folder, "results.pkl")
+with open(results_file, 'rb') as f:
+    results = pickle.load(f)
+
+model_name = "DeepSurv" if "cdeath" in event else "GBS"
+comb = {
+  "scaler": "RobustScaler",
+  "selector": "SelectKBest",
+  "model": model_name,
+  "search": "rand",
+  "strategy": "ensemble"
+}
+scaler, selector, model_name, search, train_strategy = list(comb.values())
+best_estimator = results[seed][scaler][selector][model_name][search][train_strategy]
+x_test = results[seed]["x_test"]
+x_train = results[seed]["x_train"]
+y_test = pd.DataFrame(results[seed]["y_test"])
+y_train = pd.DataFrame(results[seed]["y_train"])
+# Preprocess x_train
+x_train = best_estimator["scaler"].transform(x_train)
+x_train = best_estimator["selector"].transform(x_train)
+# Get model
+model = best_estimator['model']
+
+# Get samples
+x_test_preprocessed = best_estimator["selector"].transform(best_estimator["scaler"].transform(x_test))
+risk_scores = best_estimator.predict(x_test)
+n_groups = 3
+grid = np.quantile(risk_scores, np.linspace(start=0, stop=1, num=n_groups + 1))
+bins = np.digitize(risk_scores, grid[1:-1], right=True)
+map_ = {0: "Low Risk", 1: "Medium Risk", 2: "High Risk"}
+# Risk at times
+risk_class = np.array([map_[i] for i in bins])
+surv_func = best_estimator.predict_survival_function(x_test)
+risk_at_times = np.array([[1 - sf(t) for t in eval_times] for sf in surv_func])  # risk at eval_times (1-surv)
+df_times = pd.DataFrame(risk_at_times, columns=eval_times)
+df = pd.DataFrame({
+    "Risk Score": risk_scores,
+    "Risk Class": risk_class,
+    event_col: y_test[event_col],
+    time_col: y_test[time_col],
+})
+df = pd.concat([df, df_times], axis=1)
+if "cdeath" in event:
+  idx = [747, 115, 329, 276]
+else:
+  idx = [627, 603, 2, 162]
+labels = ["highRisk_lowSTS", "highRisk_highSTS", "lowRisk_lowSTS", "lowRisk_highSTS"]
+samples = x_test_preprocessed.iloc[idx]
+x_test = x_test.iloc[idx]
+df = df.iloc[idx]
+y_samples = y_test.iloc[idx]
+
+# Create explanation set keeping the training set median follow-up
+n = 100
+event_times = y_train[time_col][y_train[event_col] == 1]  # get event times
+bins = np.linspace(event_times.min(), event_times.max(), num=5)  # Discretize durations
+discrete_vals = np.searchsorted(bins, y_train[time_col], side='left')
+final_vals = np.where(y_train[event_col], discrete_vals, 0)  # Assign 0 where no event occurred
+n_splits = int(np.round(len(x_train) / n, decimals=0))
+cv = StratifiedKFold(n_splits=n_splits, random_state=seed, shuffle=True)
+idx_train = [x for x in cv.split(x_train, final_vals)][0][1]
+explanation_set = x_train.iloc[idx_train]
+y_expl = y_train.iloc[idx_train]
+
+print(f"Predicted risk for samples in test set:\n{df[eval_times]}")
+surv_funcs = model.predict_survival_function(explanation_set)
+risk_at_times = np.array([[1-sf(t) for t in eval_times] for sf in surv_funcs])  # risk at eval_times (1-surv)
+average_risk_times = risk_at_times.mean(axis=0)
+print(f"Mean risk on training sample: {average_risk_times}")
+
+```
+
+```{r}
+model <- py$model
+x_test <- py$x_test
+samples <- py$samples
+explanation_set <- py$explanation_set
+y_samples <- py$y_samples
+y_expl <- py$y_expl
+comb <- py$comb
+time_col <- py$time_col
+event_col <- py$event_col
+folder <- py$folder
+
+out_folder <- paste0(folder, "/explanations/local/")
+if (!dir.exists(out_folder)) {
+  dir.create(out_folder)
+}
+```
+
+```{r SHAP_computation}
+start.time <- Sys.time()
+
+explainer <- explain(
+  model,
+  data = explanation_set,
+  y = Surv(y_expl[, time_col], y_expl[, event_col]),
+  # times = c(365, 730, 1095, 1460, 1825)
+  times = seq(1, 1825, length.out = 50)
+)
+
+survshap <- model_survshap(
+  explainer = explainer,
+  new_observation = samples,
+  calculation_method = "kernelshap",
+  aggregation_method = "integral"
+)
+
+time.taken <- round(Sys.time() - start.time, 3)
+print(time.taken)
+
+filename <- paste0(out_folder, "/local_explanations.rds")
+saveRDS(survshap, filename)
+```
+
+
+```{r plots}
+shap_filepath <- paste0(out_folder, "/local_explanations.rds")
+
+# Check if the file exists before loading
+if (!file.exists(shap_filepath)) {
+  message("File not found: ", shap_filepath)
+  next  # Skip to the next iteration if the file doesn't exist
+}
+
+# Load the SHAP object
+survshap <- readRDS(shap_filepath)
+
+# Prepare data for python summary plot
+shap_aggregate_list <- list()
+shap_time_list <- list()
+for (i in seq_len(nrow(samples))) {
+  df_aggregate <- as.data.frame(t(as.data.frame(survshap$aggregate[[i]])))
+  shap_aggregate_list[[i]] <- df_aggregate
+  shap_time_list[[i]] <- survshap$result[[i]]
+}
+
+# Pass the list of dataframes to Python
+py$shap_aggregate_list <- shap_aggregate_list
+py$shap_time_list <- shap_time_list
+py$out_folder <- out_folder
+```
+
+```{python SHAP plots}
+import matplotlib.ticker as ticker
+# Get the tab10 colormap
+colors = plt.get_cmap("tab10").colors
+green = colors[2]  # index 2 is green
+red = colors[3]    # index 3 is red
+
+set_style(primary_color_positive = red, primary_color_negative = green)
+
+def custom_round(x):
+    if x == 0:
+        return 0
+    elif abs(x) >= 10:
+        return int(round(x))  # No decimals
+    elif abs(x) >= 1:
+        return round(x, 1)    # One decimal
+    else:
+        # Two significant digits
+        return round(x, 2 - int(np.floor(np.log10(abs(x)))) - 1)
+
+x_test = x_test.map(lambda x: custom_round(x))
+df_dict = pd.read_csv("datasets/features_dict_plot.csv")
+dictionary = dict(zip(df_dict.iloc[:, 1], df_dict.iloc[:, 0]))
+filtered_dict = {key: value for key, value in dictionary.items() if key in x_test.columns}
+x_test_ = x_test.rename(columns=filtered_dict)
+
+for sample_id in range(len(shap_time_list)):
+  df_shap = pd.DataFrame(shap_aggregate_list[sample_id])
+  df_shap = df_shap.rename(columns=filtered_dict)
+  sample = pd.DataFrame(x_test_.iloc[sample_id]).transpose()[df_shap.columns]
+  shap_explanation = shap.Explanation(values=-df_shap.values[0, :],
+                                      data=sample.values[0, :],
+                                      feature_names=sample.columns.values,
+                                      base_values=np.mean(average_risk_times)
+                                      )
+  fig, ax = plt.subplots(1, figsize=(50, 10))
+  shap.plots.bar(shap_explanation, max_display=15, ax=ax)
+  filename = f"barplot_{labels[sample_id]}.png"
+  plt.tight_layout()
+  ax.xaxis.set_major_locator(ticker.MaxNLocator(nbins=5))
+  plt.subplots_adjust(left=0.55, right=0.96, top=0.99, bottom=0.13)  # Adjust plot spacing
+  ax.yaxis.set_tick_params(pad=15)
+  plt.savefig(os.path.join(out_folder, filename), dpi=600)
+  plt.close()
+```
