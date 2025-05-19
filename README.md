@@ -15,7 +15,9 @@ Please kindly cite the following paper if you use this repository.
 
 ```
 @unpublished{shiri2025,
-  author       = {Isaac Shiri and Daijiro Tomii and Giovanni Baj and Pooya Mohammadi Kazaj and Toshiya Yoshida and Wen Xie and Taishi Okuno and Masaaki Nakase and Daryoush Samim and Waldo Valenzuela and Stefan Stortecky and David Reineke and Jonas Lanz and George C. M. Siontis and Yoshihiro Akashi and Thomas Pilgrim and Stephan Windecker and Christoph Gräni},
+  author       = {Isaac Shiri and Daijiro Tomii and Giovanni Baj and Pooya Mohammadi Kazaj and Toshiya Yoshida and Wen Xie
+                  and Taishi Okuno and Masaaki Nakase and Daryoush Samim and Waldo Valenzuela and Stefan Stortecky and David Reineke
+                  and Jonas Lanz and George C. M. Siontis and Yoshihiro Akashi and Thomas Pilgrim and Stephan Windecker and Christoph Gräni},
   title        = {Multimodal Artificial Intelligence-based Long-Term Outcome Prediction After Transcatheter Aortic Valve Implantation:
                   A Multicenter Development, Validation, and Testing Study},
   note         = {Under review},
