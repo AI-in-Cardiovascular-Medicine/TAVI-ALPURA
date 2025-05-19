@@ -24,7 +24,11 @@ Please kindly cite the following paper if you use this repository.
 ```
 
 ```
-Multimodal Artificial Intelligence-based Long-Term Outcome Prediction After Transcatheter Aortic Valve Implantation: A Multicenter Development, Validation, and Testing Study. Isaac Shiri, Daijiro Tomii, Giovanni Baj, Pooya Mohammadi Kazaj, Toshiya Yoshida, Wen Xie, Taishi Okuno, Masaaki Nakase, Daryoush Samim, Waldo Valenzuela, Stefan Stortecky, David Reineke, Jonas Lanz, George C. M. Siontis, Yoshihiro Akashi, Thomas Pilgrim, Stephan Windecker, Christoph Gräni. Under Review, 2025.
+Multimodal Artificial Intelligence-based Long-Term Outcome Prediction After Transcatheter Aortic Valve Implantation:
+A Multicenter Development, Validation, and Testing Study.
+Isaac Shiri, Daijiro Tomii, Giovanni Baj, Pooya Mohammadi Kazaj, Toshiya Yoshida, Wen Xie, Taishi Okuno, Masaaki Nakase,
+Daryoush Samim, Waldo Valenzuela, Stefan Stortecky, David Reineke, Jonas Lanz, George C. M. Siontis, Yoshihiro Akashi,
+Thomas Pilgrim, Stephan Windecker, Christoph Gräni. Under Review, 2025.
 
 ```
 
