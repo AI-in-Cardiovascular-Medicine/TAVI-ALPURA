@@ -1,0 +1,55 @@
+defaults:
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
+  - _self_ # keep this to the end of defaults to have config.yaml override values set in other yamls
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
+
+meta:
+  in_file: datasets/cdeath/Bern.xlsx
+  test_file: datasets/cdeath/Japan.xlsx
+  out_dir: results/cdeath_sts
+  manually_selected_features: ["Base_STS"]
+  events: "OutCome_CDeath"
+  times: "OutCome_Death_Days"
+  competing_events: "event_competing_cdeath"
+  seed: 42
+  n_workers: 24
+  plot_format: "png"
+  plot_dpi: 600
+  overwrite: False
+
+preprocessing:
+  corr_threshold: 0.90
+  replace_zero_time_with: 0.01
+  columns_to_drop:
+
+evaluation:
+  eval_times:  [ 365, 730, 1095, 1460, 1825 ]
+  eval_times_names: [ "1y", "2y", "3y", "4y", "5y" ]
+  bootstrap_iterations: 20
+
+survival:
+  n_cv_splits: 5
+  n_iter_search_bayes: 1
+  n_iter_search_rand: 1
+  hyperparams_search_strategy:
+    none: True
+    bayes: False
+    rand: False
+  scalers:
+    RobustScaler: True
+  feature_selectors:
+    SelectKBest: False
+    Manual: True
+    RFE: False
+    SequentialForward: False
+  models:
+    CoxPH: True
+    CoxNet: False
+    GBS: False
+    RSF: False
+    DeepSurv: False
